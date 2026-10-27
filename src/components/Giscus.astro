@@ -18,25 +18,38 @@ const isGiscusConfigured = [
   isGiscusConfigured && (
     <>
       <div class="giscus" />
+      {/* Built at runtime so the starting theme follows the site's toggle, not the OS */}
       <script
         is:inline
         data-astro-rerun
-        src="https://giscus.app/client.js"
-        data-repo={PUBLIC_GISCUS_REPO}
-        data-repo-id={PUBLIC_GISCUS_REPO_ID}
-        data-category={PUBLIC_GISCUS_CATEGORY}
-        data-category-id={PUBLIC_GISCUS_CATEGORY_ID}
-        data-mapping="pathname"
-        data-strict="0"
-        data-reactions-enabled="1"
-        data-emit-metadata="0"
-        data-input-position="top"
-        data-theme="preferred_color_scheme"
-        data-lang="en"
-        data-loading="lazy"
-        crossorigin="anonymous"
-        async
-      />
+        define:vars={{
+          repo: PUBLIC_GISCUS_REPO,
+          repoId: PUBLIC_GISCUS_REPO_ID,
+          category: PUBLIC_GISCUS_CATEGORY,
+          categoryId: PUBLIC_GISCUS_CATEGORY_ID,
+        }}
+      >
+        const isDark = document.documentElement.classList.contains("dark");
+        const giscus = document.createElement("script");
+        giscus.src = "https://giscus.app/client.js";
+        giscus.crossOrigin = "anonymous";
+        giscus.async = true;
+        Object.assign(giscus.dataset, {
+          repo,
+          repoId,
+          category,
+          categoryId,
+          mapping: "pathname",
+          strict: "0",
+          reactionsEnabled: "1",
+          emitMetadata: "0",
+          inputPosition: "bottom",
+          theme: isDark ? "noborder_dark" : "noborder_light",
+          lang: "en",
+          loading: "lazy",
+        });
+        document.currentScript.after(giscus);
+      </script>
     </>
   )
 }

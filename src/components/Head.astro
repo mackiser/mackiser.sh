@@ -256,7 +256,7 @@ const { title, description, image = "/astro-micro.jpg" } = Astro.props;
 
     if (giscus) {
       const url = new URL(giscus.src);
-      url.searchParams.set("theme", isDark ? "dark" : "light");
+      url.searchParams.set("theme", isDark ? "noborder_dark" : "noborder_light");
       giscus.src = url.toString();
     }
   };
