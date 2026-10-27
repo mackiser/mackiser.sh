@@ -10,15 +10,24 @@ import type { CollectionEntry } from "astro:content";
 // markup from blobatar/internal the same way @blobatar/svelte does. That entry
 // point can change between majors, which is why blobatar is pinned exactly.
 import { _parts } from "blobatar/internal";
+import { mad } from "blobatar/expression";
 import "blobatar/motion.css";
 import "blobatar/gaze.css";
 
 const avatarTitle = "Mac's avatar";
 const avatar = _parts(AVATAR_SEED, { animate: "always", title: avatarTitle });
-const avatarStyle = Object.entries(avatar.vars ?? {})
+const avatarVars = avatar.vars ?? {};
+const avatarStyle = Object.entries(avatarVars)
   .map(([key, value]) => `${key}:${value}`)
   .concat("--mo-track-travel:3px")
   .join(";");
+
+// The mad pose only differs in custom properties (plus the mo-expr class), so
+// the click handler swaps just those in and back out
+const madVars = _parts(AVATAR_SEED, { animate: "always", expression: mad }).vars ?? {};
+const madChanges = Object.fromEntries(
+  Object.entries(madVars).filter(([key, value]) => avatarVars[key] !== value),
+);
 
 const blog = (await getCollection("blog"))
   .filter((post) => !post.data.draft)
@@ -44,6 +53,8 @@ const projects: CollectionEntry<"projects">[] = (
           class="size-28"
           role="img"
           style={avatarStyle}
+          data-mad={JSON.stringify(madChanges)}
+          data-idle={JSON.stringify(avatarVars)}
         >
           <title>{avatarTitle}</title>
           {avatar.bg && <path d={avatar.bg.d} fill={avatar.bg.fill} />}
@@ -134,5 +145,31 @@ const projects: CollectionEntry<"projects">[] = (
     document.addEventListener("astro:before-swap", () => eyes.stop(), {
       once: true,
     });
+
+    // Clicking makes it mad for a moment, then it calms back down
+    const root = avatar.querySelector(".mo-root")!;
+    const madVars: Record<string, string> = JSON.parse(avatar.dataset.mad!);
+    const idleVars: Record<string, string> = JSON.parse(avatar.dataset.idle!);
+    let calmDown: number | undefined;
+    avatar.addEventListener("click", () => {
+      for (const [key, value] of Object.entries(madVars))
+        avatar.style.setProperty(key, value);
+      root.classList.add("mo-expr");
+      clearTimeout(calmDown);
+      calmDown = window.setTimeout(() => {
+        for (const key of Object.keys(madVars)) {
+          if (key in idleVars) avatar.style.setProperty(key, idleVars[key]);
+          else avatar.style.removeProperty(key);
+        }
+        root.classList.remove("mo-expr");
+      }, 1500);
+    });
   });
 </script>
+
+<style>
+  /* Keep the idle motion but drop blobatar's lift-and-grow on hover */
+  #avatar :global(.mo-root:hover) {
+    transform: none;
+  }
+</style>
