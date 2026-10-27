@@ -6,10 +6,14 @@ import { AVATAR_SEED } from "@consts";
 const SIZE = 64;
 
 // A static render of the homepage blobatar, as a single-image ICO with a PNG
-// payload, which every current browser accepts
+// payload, which every current browser accepts. The SVG pads the blob with
+// empty space, so trim it off and centre the blob in the icon instead
 export const GET: APIRoute = async () => {
-  const png = await sharp(Buffer.from(blobatar(AVATAR_SEED)))
-    .resize(SIZE, SIZE)
+  const blob = await sharp(Buffer.from(blobatar(AVATAR_SEED)), { density: 288 })
+    .trim()
+    .toBuffer();
+  const png = await sharp(blob)
+    .resize(SIZE, SIZE, { fit: "contain", background: "#0000" })
     .png()
     .toBuffer();
 
