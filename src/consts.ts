@@ -8,6 +8,9 @@ export const SITE: Site = {
   NUM_PROJECTS_ON_HOMEPAGE: 3,
 };
 
+// Seeds the homepage blobatar and the favicon; changing it changes both
+export const AVATAR_SEED = "sh.resikcam";
+
 export const HOME: Metadata = {
   TITLE: "Home",
   DESCRIPTION: "mackiser.sh is a personal website and blog built with Astro.",

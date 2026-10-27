@@ -22,7 +22,9 @@
     "@tailwindcss/vite": "^4.1.13",
     "astro": "^6.1.3",
     "astro-pagefind": "^1.8.5",
+    "blobatar": "2.7.0",
     "clsx": "^2.1.1",
+    "sharp": "0.34.5",
     "tailwind-merge": "^3.3.1",
     "tailwindcss": "^4.1.13",
     "typescript": "^5.9.2"
