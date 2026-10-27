@@ -5,6 +5,8 @@ import { SITE, HOME, SOCIALS } from "@consts";
 import ArrowCard from "@components/ArrowCard.astro";
 import Link from "@components/Link.astro";
 import { getCollection } from "astro:content";
+import { Image } from "astro:assets";
+import avatar from "../assets/avatar.png";
 import type { CollectionEntry } from "astro:content";
 
 const blog = (await getCollection("blog"))
@@ -23,46 +25,44 @@ const projects: CollectionEntry<"projects">[] = (
 <Layout title={HOME.TITLE} description={HOME.DESCRIPTION}>
   <Container>
     <aside data-pagefind-ignore>
-      <h1 class="font-semibold text-black dark:text-white">
-        Introducing Astro Micro 🔬
+      <h1 class="flex items-center justify-center gap-3 font-semibold text-black dark:text-white">
+        <Image
+          src={avatar}
+          alt="Mac's avatar"
+          width={112}
+          height={112}
+          class="size-28 rounded-full"
+          loading="eager"
+        />
+        
       </h1>
       <div class="space-y-16">
         <section>
           <article class="space-y-4">
             <span>
               <p>
-                Astro Micro is an accessible theme for <Link
-                  href="https://astro.build/">Astro</Link
-                >. It's a fork of
-                <Link href="https://github.com/markhorn-dev">
-                  Mark Horn's
-                </Link> popular theme <Link
-                  href="https://astro.build/themes/details/astronano/"
-                  >Astro Nano</Link
-                >. Like Nano, Micro comes with zero frameworks installed.
+                Hey, I'm Mac — an infrastructure and DevOps engineer with a background
+                in security, based in Baltimore. By day I wrangle Ansible playbooks and
+                CI pipelines; by night I break things in my home lab.
               </p>
               <p>
-                Micro adds features like <Link href="https://pagefind.app/"
-                  >Pagefind</Link
-                > for search, <Link href="https://giscus.app">Giscus</Link> for comments,
-                and more. For a full list of changes, see this <Link
-                  href="/blog/00-micro-changelog">blog post</Link
-                >.
+                This blog is where I word-dump about whatever has my attention that
+                week: infrastructure-as-code, security, self-hosting, and the
+                occasional detour into something with no technical value at all.
               </p>
             </span>
             <span class="animate">
               <p>
-                Micro still comes with everything great about Nano — full type
-                safety, a sitemap, an RSS feed, and Markdown + MDX support.
-                Styled with TailwindCSS and preconfigured with system, light,
-                and dark themes.
+                Fair warning: this place is a bit of an echo chamber. Population: me.
+                Every post is reviewed, approved, and enthusiastically agreed with by
+                its author. If you want to break the cycle, that's what the
+                comments are for.
               </p>
               <p>
-                Visit
-                <Link href="https://github.com/trevortylerlee/astro-micro">
-                  Astro Micro on GitHub
-                </Link>
-                to fork the repository to get started.
+                You can find my code on
+                <Link href="https://github.com/mackiser" external>GitHub</Link>
+                and my questionable movie opinions on
+                <Link href="https://letterboxd.com/mackiser/" external>Letterboxd</Link>.
               </p>
             </span>
           </article>
@@ -101,42 +101,6 @@ const projects: CollectionEntry<"projects">[] = (
                 </li>
               ))
             }
-          </ul>
-        </section>
-
-        <section class="animate space-y-4">
-          <h2 class="font-semibold text-black dark:text-white">
-            Let's Connect
-          </h2>
-          <article>
-            <p>
-              If you want to get in touch with me about something or just to say
-              hi, reach out on social media or send me an email.
-            </p>
-          </article>
-          <ul class="not-prose flex flex-wrap gap-2">
-            {
-              SOCIALS.map((SOCIAL) => (
-                <li class="flex gap-x-2 text-nowrap">
-                  <Link
-                    href={SOCIAL.HREF}
-                    external
-                    aria-label={`${SITE.TITLE} on ${SOCIAL.NAME}`}
-                  >
-                    {SOCIAL.NAME}
-                  </Link>
-                  {"/"}
-                </li>
-              ))
-            }
-            <li class="line-clamp-1">
-              <Link
-                href={`mailto:${SITE.EMAIL}`}
-                aria-label={`Email ${SITE.TITLE}`}
-              >
-                {SITE.EMAIL}
-              </Link>
-            </li>
           </ul>
         </section>
       </div>
