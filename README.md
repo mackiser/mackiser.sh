@@ -1,4 +1,4 @@
-# [mackiser.sh](https://mackiser.sh)
+# mackiser.sh
 
 My personal site and blog. I'm Mac, an infrastructure and DevOps engineer with a background in security, based in Baltimore. I write about infrastructure-as-code, security, self-hosting, home lab experiments, and whatever else has my attention that week.
 
