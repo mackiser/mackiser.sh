@@ -4,7 +4,7 @@ description: "Infrastructure-as-code for a private Matrix/Synapse homeserver. St
 date: "2026-10-23"
 ---
 
-I want a private Matrix homeserver, and I want to never configure it by hand. Every package, user, firewall rule and config file on the box comes from an Ansible playbook in git. It's also my excuse to practice infrastructure-as-code, CI/CD and Linux hardening on something I'll actually use.
+I wanted a private Matrix homeserver, and I wanted to never configure it by hand. Every package, user, firewall rule and config file on the box comes from an Ansible playbook in git. It's also my excuse to practice infrastructure-as-code, CI/CD and Linux hardening on something I'll actually use.
 
 The tooling is pinned end to end:
 
