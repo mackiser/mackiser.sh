@@ -1,0 +1,85 @@
+---
+title: "ubuntu26-ip-forward"
+description: "Enabling IPv4 forwarding on Ubuntu 26.XX hosts via Ansible"
+date: "2026-11-04"
+repoURL: "https://github.com/mackiser/ubuntu26-ip-forward"
+---
+
+## The Issue
+
+Some `sysctl` directives that work on Ubuntu 24.04 no longer apply the same way
+on Ubuntu 26.04.
+
+## The Solution
+
+Create a reusable, idempotent ansible role to enable IPv4 forwarding on Ubuntu 26.04 hosts.
+
+## What the task actually required
+
+Two pieces of research:
+
+1. **Getting the OS version.** Ansible's `setup` module gathers facts I could gate on — specifically `ansible_facts['distribution']` and `ansible_facts['distribution_major_version']`.
+2. **Choosing a module.** I could use `command`, `template`, or `copy`. I landed on `copy` with inline `content:` — it's idempotent (it only rewrites when the content changes) and needs no extra files or collections.
+
+The core task:
+
+```yaml
+- name: Ensure /etc/sysctl.d/99-forwarding.conf enables ip_forward (Ubuntu 26 only)
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-forwarding.conf
+    content: |
+      net.ipv4.ip_forward = 1
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - ansible_facts['os_family'] == 'Debian'
+    - ansible_facts['distribution'] == 'Ubuntu'
+    - ansible_facts['distribution_major_version'] == '26'
+```
+
+## Roadblocks (and how I got around them)
+
+### Deprecated fact syntax
+Ansible is moving away from the old `ansible_distribution` top-level facts toward reading them from the `ansible_facts` dictionary. I switched to `ansible_facts['distribution']` etc. to avoid deprecation warnings and to keep a potential CI linter happy.
+
+### Testing it without a fleet of VMs
+This is where [Molecule](https://ansible.readthedocs.io/projects/molecule/) came into play. It spins up throwaway containers, applies the task, verifies the result, and tears everything down in one command. The `just test` command proves three things at once:
+
+| STEP          | UBUNTU 26.04                             | UBUNTU 24.04   |
+|---------------|------------------------------------------|----------------|
+| `converge`    | task `changed` (file written)            | task `skipped` |
+| `idempotence` | re-run reports `changed: 0`              | --             |
+| `verify`      | file exists, mode `0644`, content correct| file absent    |
+
+### Validating the real thing
+Molecule proved the config file is written correctly. But a file isn't the
+same as the kernel actually forwarding packets. Docker can't apply net sysctls
+to the running kernel, so I validated on a real Ubuntu 26.04 VM:
+
+```bash
+# baseline
+sudo sysctl -w net.ipv4.ip_forward=0
+
+# run the playbook (writes the file; runtime still 0)
+# apply it live
+sudo sysctl -p /etc/sysctl.d/99-forwarding.conf
+sysctl net.ipv4.ip_forward   # -> 1
+```
+
+## Turning it into a role
+
+The final step was converting the playbook into a reusable Ansible role.
+
+```
+roles/
+└── ip-forward/
+    ├── tasks/main.yml      # the gated task (Ubuntu 26 only)
+    ├── defaults/main.yml   # sysctl name/value/path (overridable)
+    └── meta/main.yml       # role metadata
+```
+
+## Repo
+
+The full project lives here:
+- [mackiser/ubuntu26-ip-forward](https://github.com/mackiser/ubuntu26-ip-forward)
