@@ -79,6 +79,27 @@ roles/
     └── meta/main.yml       # role metadata
 ```
 
+## Optional live-apply path (and a debugging tour)
+
+Because the role is parameterized, I added an opt-in flag: `sysctl_forward_apply_live` that switches from writing the file only to also applying it to the running kernel immediately, via `ansible.posix.sysctl`. The default stays `false`: writing the file is faithful to the original approach and applies cleanly on the next reboot.
+
+This surfaced something interesting. A colleague had reported that `ansible.posix.sysctl` was causing problems on Ubuntu 26 hosts in a separate ansible-galaxy role. Looking at that role's task, the key difference was `reload: true`.
+
+```yaml
+- name: Set ipv4_forward
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    sysctl_set: true
+    state: present
+    reload: true        # re-applies *every* sysctl on the host
+  when: netplan_configuration.network.tunnels is defined
+```
+
+`reload: true` run `sysctl --system`, which re-applies **every** sysctl on the machine and canfail on any unrelated key that is invalid or locked on the running kernel. This could report the whole task as failed.
+
+So my opt-in deliberately omits `reload` and testing it on a clean Ubuntu 26.04 VM worked fine.
+
 ## Repo
 
 The full project lives here:
