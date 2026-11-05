@@ -1,27 +1,25 @@
 ---
 title: "ubuntu26-ip-forward"
-description: "Enabling IPv4 forwarding on Ubuntu 26.XX hosts via Ansible"
+description: "An Ansible role that turns on IPv4 forwarding on Ubuntu 26.04 hosts and leaves every other host alone."
 date: "2026-11-04"
 repoURL: "https://github.com/mackiser/ubuntu26-ip-forward"
 ---
 
-## The Issue
+## Background
 
-Some `sysctl` directives that work on Ubuntu 24.04 no longer apply the same way
-on Ubuntu 26.04.
+Linux won't pass traffic from one network interface to another unless IPv4 forwarding is turned on. That's controlled by a kernel setting, `net.ipv4.ip_forward`, and any host that routes traffic needs it set to `1`.
 
-## The Solution
+The usual way to make that stick was to `echo` the setting into a file under `/etc/sysctl.d/` with `tee`. On Ubuntu 26.04, that approach stopped working for some sysctl values, while Ubuntu 24.04 hosts were still fine. I needed a replacement that only touched 26.04 hosts and left everything else exactly as it was.
 
-Create a reusable, idempotent ansible role to enable IPv4 forwarding on Ubuntu 26.04 hosts.
+## The approach
 
-## What the task actually required
+The job came down to two questions.
 
-Two pieces of research:
+**How do I tell which hosts are on 26.04?** Ansible gathers facts about every host before it runs anything, including the OS family, distribution and major version. Gating the task on those facts means every other host gets skipped.
 
-1. **Getting the OS version.** Ansible's `setup` module gathers facts I could gate on — specifically `ansible_facts['distribution']` and `ansible_facts['distribution_major_version']`.
-2. **Choosing a module.** I could use `command`, `template`, or `copy`. I landed on `copy` with inline `content:` — it's idempotent (it only rewrites when the content changes) and needs no extra files or collections.
+**How should the file get written?** I could have used `command`, `template` or `copy`. I went with `copy` and inline `content`. It only rewrites the file when the content changes, so it's idempotent, and it doesn't need a separate template file.
 
-The core task:
+Here's the core task:
 
 ```yaml
 - name: Ensure /etc/sysctl.d/99-forwarding.conf enables ip_forward (Ubuntu 26 only)
@@ -38,52 +36,37 @@ The core task:
     - ansible_facts['distribution_major_version'] == '26'
 ```
 
-## Roadblocks (and how I got around them)
+The file is named `99-forwarding.conf` so it loads last and overrides anything earlier in `/etc/sysctl.d/`. I also read the facts through `ansible_facts['distribution']` rather than the older top-level `ansible_distribution` variables, which Ansible is phasing out.
 
-### Deprecated fact syntax
-Ansible is moving away from the old `ansible_distribution` top-level facts toward reading them from the `ansible_facts` dictionary. I switched to `ansible_facts['distribution']` etc. to avoid deprecation warnings and to keep a potential CI linter happy.
+Once it worked as a playbook, I turned it into a reusable role. The setting name, value and file path all live in `defaults/main.yml`, so they can be overridden in the inventory, in `group_vars` or with `-e`.
 
-### Testing it without a fleet of VMs
-This is where [Molecule](https://ansible.readthedocs.io/projects/molecule/) came into play. It spins up throwaway containers, applies the task, verifies the result, and tears everything down in one command. The `just test` command proves three things at once:
+## Testing without a pile of VMs
 
-| STEP          | UBUNTU 26.04                             | UBUNTU 24.04   |
-|---------------|------------------------------------------|----------------|
-| `converge`    | task `changed` (file written)            | task `skipped` |
-| `idempotence` | re-run reports `changed: 0`              | --             |
-| `verify`      | file exists, mode `0644`, content correct| file absent    |
+I didn't want to stand up VMs every time I changed something, so the repo uses [Molecule](https://ansible.readthedocs.io/projects/molecule/). Running `just test` starts two throwaway containers, one on Ubuntu 26.04 and one on 24.04. It applies the role to both, checks the results and then removes them.
 
-### Validating the real thing
-Molecule proved the config file is written correctly. But a file isn't the
-same as the kernel actually forwarding packets. Docker can't apply net sysctls
-to the running kernel, so I validated on a real Ubuntu 26.04 VM:
+| Step          | Ubuntu 26.04                                             | Ubuntu 24.04   |
+|---------------|----------------------------------------------------------|----------------|
+| `converge`    | task `changed` (file written)                            | task `skipped` |
+| `idempotence` | re-run reports `changed: 0`                              | --             |
+| `verify`      | file exists, owned by root, mode `0644`, content correct | file absent    |
+
+That proves the file is written correctly and only where it should be. It doesn't prove the kernel is actually forwarding packets, because Docker containers can't change network sysctls on the running kernel. For that part I used a real Ubuntu 26.04 VM:
 
 ```bash
-# baseline
+# start from a known state
 sudo sysctl -w net.ipv4.ip_forward=0
 
-# run the playbook (writes the file; runtime still 0)
-# apply it live
+# run the playbook (the file is written, but the running value is still 0)
+# then load the file
 sudo sysctl -p /etc/sysctl.d/99-forwarding.conf
 sysctl net.ipv4.ip_forward   # -> 1
 ```
 
-## Turning it into a role
+## Applying it live
 
-The final step was converting the playbook into a reusable Ansible role.
+By default the role only writes the file, the same as the old `echo | tee` approach. The setting takes effect on the next reboot or `sysctl -p`. For hosts that need it right away, there's an opt-in flag, `sysctl_forward_apply_live: true`, that also sets the value on the running kernel with `ansible.posix.sysctl`.
 
-```
-roles/
-└── ip-forward/
-    ├── tasks/main.yml      # the gated task (Ubuntu 26 only)
-    ├── defaults/main.yml   # sysctl name/value/path (overridable)
-    └── meta/main.yml       # role metadata
-```
-
-## Optional live-apply path (and a debugging tour)
-
-Because the role is parameterized, I added an opt-in flag: `sysctl_forward_apply_live` that switches from writing the file only to also applying it to the running kernel immediately, via `ansible.posix.sysctl`. The default stays `false`: writing the file is faithful to the original approach and applies cleanly on the next reboot.
-
-This surfaced something interesting. A colleague had reported that `ansible.posix.sysctl` was causing problems on Ubuntu 26 hosts in a separate ansible-galaxy role. Looking at that role's task, the key difference was `reload: true`.
+Adding that flag turned up something useful. A colleague had reported that `ansible.posix.sysctl` was causing failures on Ubuntu 26 hosts in a separate role from Ansible Galaxy. Comparing that role's task with mine, the difference was `reload: true`:
 
 ```yaml
 - name: Set ipv4_forward
@@ -92,15 +75,10 @@ This surfaced something interesting. A colleague had reported that `ansible.posi
     value: '1'
     sysctl_set: true
     state: present
-    reload: true        # re-applies *every* sysctl on the host
+    reload: true        # re-applies every sysctl on the host
   when: netplan_configuration.network.tunnels is defined
 ```
 
-`reload: true` run `sysctl --system`, which re-applies **every** sysctl on the machine and canfail on any unrelated key that is invalid or locked on the running kernel. This could report the whole task as failed.
+`reload: true` runs `sysctl --system`, which reapplies every sysctl setting on the machine. If any unrelated key is invalid or locked on the running kernel, the whole task fails, even when the forwarding setting itself applied fine.
 
-So my opt-in deliberately omits `reload` and testing it on a clean Ubuntu 26.04 VM worked fine.
-
-## Repo
-
-The full project lives here:
-- [mackiser/ubuntu26-ip-forward](https://github.com/mackiser/ubuntu26-ip-forward)
+So the live option here leaves `reload` out and sets only the one value. On a clean Ubuntu 26.04 VM it worked without any problems.
