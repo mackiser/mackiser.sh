@@ -1,0 +1,207 @@
+---
+title: "Keeping my homelab up to date with Ansible"
+description: "Ansible playbooks that update every container, VM and the Proxmox host in my homelab, via Forgejo runners."
+date: "2026-11-18"
+repoURL: ""
+---
+
+## Background
+
+After moving my homelab from Unraid to Proxmox, I had six machines to keep up to date: four LXC containers, a Debian VM that runs Docker, and the Proxmox host itself. Each one updated a little differently:
+
+- **Plex** comes from the Plex apt repository, so a normal `apt` upgrade covers it.
+- **AdGuard Home** and the **Beszel hub** are single binaries with their own built-in updaters.
+- **Uptime Kotlin** runs as a Docker compose stack inside its container.
+- **Proxmox** needs `apt dist-upgrade`, never plain `apt upgrade`.
+
+The containers came from the community helper scripts, which ship an `update` command. I didn't use it. It's interactive, and it downloads its scripts fresh on every run, which isn't something I want running unattended as root.
+
+What I wanted was one command that updates everything in a safe order, a dry run that shows what would change, and eventually a button I could press from a browser.
+
+## How it connects
+
+The Docker VM is the Ansible controller, and the repo lives on my self-hosted Forgejo. Ansible never logs in as root. Every target has a dedicated `ansible` user with its own SSH key and passwordless `sudo`. For the LXCs, I created that user from the Proxmox host with `pct exec`, so I never had to enable root SSH anywhere.
+
+```ini
+[defaults]
+inventory = inventory/hosts.yml
+remote_user = ansible
+private_key_file = ~/.ssh/ansible_ed25519
+interpreter_python = auto_silent
+callback_result_format = yaml
+
+[privilege_escalation]
+become = True
+```
+
+The inventory has two groups. `lxc` holds the four containers, and `servers` holds the Docker VM and the Proxmox host. Each group has its own playbook, so a routine container update can never touch the hypervisor by accident.
+
+## Three roles
+
+| Role             | What it does                                                         | Runs on                           |
+|------------------|----------------------------------------------------------------------|-----------------------------------|
+| `os_update`      | `apt dist-upgrade` or `apk upgrade`, then checks if a restart is due | every host                        |
+| `compose_update` | pulls new images and recreates changed containers                    | hosts with `compose_stacks` set   |
+| `app_update`     | updates a self-updating binary when a newer release exists           | hosts with `app` set              |
+
+Per-host behavior lives in the inventory rather than in the playbooks. This is the AdGuard entry, with the address left out:
+
+```yaml
+adguard:
+  ctid: 102
+  app:
+    name: AdGuard Home
+    repo: AdguardTeam/AdGuardHome
+    binary: /opt/AdGuardHome/AdGuardHome
+    version_args: --version
+    update_args: --update
+    service: AdGuardHome
+    port: 53
+```
+
+Adding another self-updating app means adding another `app:` block. The role doesn't change.
+
+## OS updates and knowing when to restart
+
+`os_update` uses `upgrade: dist` for every apt host. It's the only correct way to upgrade Proxmox, and it's harmless on Debian and Ubuntu.
+
+Deciding whether a restart is needed took two checks. Debian and Ubuntu drop a `/var/run/reboot-required` file when a package asks for one, but Proxmox doesn't always do that after a kernel update. So on VMs and bare metal, the role also compares the newest installed kernel with the running one:
+
+```yaml
+- name: Newest installed kernel
+  ansible.builtin.shell: set -o pipefail; ls /boot/vmlinuz-* | sed 's|.*/vmlinuz-||' | sort -V | tail -1
+  args:
+    executable: /bin/bash
+  register: newest_kernel
+  changed_when: false
+  check_mode: false
+  when: ansible_facts.virtualization_type != 'lxc'
+```
+
+Containers skip this check because they run on the host's kernel and have no `/boot` of their own.
+
+## Never restarting the wrong machine
+
+Restarts are opt-in with `-e allow_reboot=true`, and even then two machines are off limits. Restarting the Proxmox host stops every guest. The Docker VM is the machine running Ansible, so restarting it would end the run halfway through. Both sit in the `servers` group with a flag that wins over everything else:
+
+```yaml
+servers:
+  vars:
+    never_reboot: true
+```
+
+```yaml
+- name: Restart the machine
+  ansible.builtin.reboot:
+  when: restart_needed | bool and allow_reboot | bool and not never_reboot | default(false)
+```
+
+When one of them needs a restart, the run ends with "A restart is recommended" and the running and installed kernel versions. I restart those by hand when it suits me.
+
+Both playbooks also run with `serial: 1` and `max_fail_percentage: 0`. Hosts update one at a time, and the run stops at the first failure. That matters most for AdGuard: it's my DNS server, and updating it drops DNS for a few seconds. With `serial: 1`, nothing else is updating while that happens.
+
+## Apps that update themselves
+
+AdGuard Home and Beszel can both update themselves, but their updaters always do something, even when there's nothing new. I wanted `--check` to answer "would this update?", so `app_update` asks GitHub first:
+
+```yaml
+- name: Compare versions
+  ansible.builtin.set_fact:
+    app_current: "{{ app_installed.stdout | regex_search('\\d+\\.\\d+\\.\\d+') }}"
+    app_latest: "{{ app_release.json.tag_name | regex_search('\\d+\\.\\d+\\.\\d+') }}"
+
+- name: "{{ app.name }}: {{ app_current }} -> {{ app_latest }}"
+  ansible.builtin.command: "{{ app.binary }} {{ app.update_args }}"
+  when: app_current != app_latest
+  register: app_update_run
+  changed_when: true
+```
+
+The version lookups set `check_mode: false`, so they run during a dry run too, and the task name shows the jump, for example `AdGuard Home: 0.107.x -> 0.107.y`. When an update does run, the role restarts the service, waits for its port to answer and then confirms that the new version is the one reported.
+
+After a Beszel hub update, the Beszel agents need updating too, so they match the hub. That part is still manual.
+
+## Getting rid of a noisy warning
+
+The first version listed `app_update` under `roles:` with a `when:` condition. It worked, but every host without an `app` printed warnings about `'app' is undefined`. A `when:` on a role is copied onto each of its tasks, and Ansible still templates task names like `Installed {{ app.name }} version` before it skips them.
+
+Switching to `include_role` fixed it. The condition is checked once, and the role isn't loaded at all on hosts that don't need it:
+
+```yaml
+tasks:
+  - name: Update self-updating app
+    ansible.builtin.include_role:
+      name: app_update
+    when: app is defined
+```
+
+## Compose stacks
+
+`compose_update` is deliberately plain:
+
+```yaml
+- name: Pull and recreate compose stacks
+  ansible.builtin.command:
+    cmd: docker compose up -d --pull always --remove-orphans
+    chdir: "{{ item }}"
+  loop: "{{ compose_stacks }}"
+  register: compose_up
+  changed_when: "'Recreate' in compose_up.stderr"
+```
+
+The trade-off is that `command` tasks are skipped during `--check`, so a dry run doesn't show compose updates. The `community.docker.docker_compose_v2` module would support check mode, but it needs the Docker SDK for Python on the target. For one stack, that wasn't worth it.
+
+## A button in Forgejo
+
+Running the playbooks from a terminal worked, but I wanted to start an update from my phone too. Forgejo Actions supports manually triggered workflows with inputs, so the repo has one workflow with four options:
+
+| Input          | Type   | Default      | Effect                                           |
+|----------------|--------|--------------|--------------------------------------------------|
+| `playbook`     | choice | `update-lxc` | `update-lxc` or `update-hosts`                   |
+| `check`        | bool   | `true`       | adds `--check`, so a click is a dry run by default |
+| `limit`        | string | empty        | adds `--limit`, for example `plex`               |
+| `allow_reboot` | bool   | `false`      | lets LXCs restart; never the servers             |
+
+```yaml
+jobs:
+  ansible:
+    runs-on: docker-vm
+    env:
+      PLAYBOOK: ${{ inputs.playbook }}
+      CHECK: ${{ inputs.check }}
+      LIMIT: ${{ inputs.limit }}
+      REBOOT: ${{ inputs.allow_reboot }}
+      ANSIBLE_FORCE_COLOR: "1"
+    steps:
+      - name: ansible-playbook
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /opt/ansible/homelab-ansible
+          git pull --ff-only
+          args=()
+          [ "$CHECK" = true ] && args+=(--check)
+          [ -n "$LIMIT" ] && args+=(--limit "$LIMIT")
+          [ "$REBOOT" = true ] && args+=(-e allow_reboot=true)
+          ansible-playbook "playbooks/$PLAYBOOK.yml" "${args[@]}"
+```
+
+The inputs reach the script as environment variables, never pasted into it with `${{ }}`. A `limit` value like `plex; rm -rf ~` then stays a harmless string instead of becoming part of the command.
+
+Dry run is on by default. A careless click just shows what would change.
+
+## Why the runner isn't in Docker
+
+The usual way to run a Forgejo runner is as a container. I didn't do that here. `update-hosts` upgrades the Docker VM, and a Docker engine upgrade restarts every container on it. If the runner were one of them, it would kill its own job partway through an update.
+
+Instead, the runner is a plain binary running as a systemd service in host mode, under my normal user. Jobs run in the same checkout, with the same Ansible install and the same SSH key as a manual run, so the button and the terminal behave the same. It has no dependency on the Docker service, and it runs one job at a time.
+
+Registering it didn't need a token copied out of the web UI. Forgejo's CLI can register a runner offline against a shared secret, and the runner reads that secret from a file. Nothing sensitive ends up in its config.
+
+## What it doesn't do
+
+- **The app containers on the Docker VM** are updated separately, through my Dockhand.
+- **The Proxmox host and the Docker VM** are restarted by hand, as covered above.
+- **Ubuntu's phased updates** can leave a few packages "upgradable" on the Plex container after a run. That's Ubuntu rolling updates out gradually, not a failure.
+
+The whole thing is three roles, two playbooks and one workflow. A routine update is now one click and a read through the log.
